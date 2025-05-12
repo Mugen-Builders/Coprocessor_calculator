@@ -9,8 +9,8 @@ contract Calculator is CoprocessorAdapter {
 
     uint256 totalRequest;
 
-    mapping (bytes32 => Record) public encodedRequestToResponse;
-    mapping (address => History[]) public userToRequestHistory;
+    mapping (bytes32 => Record) encodedRequestToResponse;
+    mapping (address => History[]) userToRequestHistory;
 
     struct Operation {
         uint256 firstNumber;
@@ -21,7 +21,9 @@ contract Calculator is CoprocessorAdapter {
     struct Record {
         uint id;
         bytes32 encodedRequest;
-        bytes result;
+        uint256 result;
+        uint256 computationTimeInMiliSec;
+        bool completed;
     }
 
     struct History {
@@ -32,7 +34,7 @@ contract Calculator is CoprocessorAdapter {
 
     event EncodedOperation(bytes encoded);
     event receivedResult(bytes result);
-    event ComputationResultAlreadyExists(bytes32 request, bytes result);
+    event ComputationResultAlreadyExists(bytes32 request, uint256 result);
 
     constructor(address _taskIssuerAddress, bytes32 _machineHash)
         CoprocessorAdapter(_taskIssuerAddress, _machineHash)
@@ -59,60 +61,62 @@ contract Calculator is CoprocessorAdapter {
         userToRequestHistory[msg.sender].push(newHistory);
 
         if (encodedRequestToResponse[request].id == 0) {
-            Record memory record = Record(totalRequest, request, '0x00');
+            Record memory record = Record(totalRequest, request, 0, 0, false);
             encodedRequestToResponse[request] = record;
             return true;
         } else {
-            bytes memory result =  encodedRequestToResponse[request].result;
-            Record memory record = Record(totalRequest, request, result);
+            uint256 result =  encodedRequestToResponse[request].result;
+            uint256 durationMs =  encodedRequestToResponse[request].computationTimeInMiliSec;
+
+            Record memory record = Record(totalRequest, request, result, durationMs, true);
             encodedRequestToResponse[request] = record;
+
             emit ComputationResultAlreadyExists(request, result);
             return false;
         }
-        
     }
 
     function recordResult(bytes32 request, bytes memory response) internal {
-        encodedRequestToResponse[request].result = response;
+
+        (uint256 result, uint256 durationMs) = abi.decode(response, (uint256, uint256));
+        encodedRequestToResponse[request].result = result;
+        encodedRequestToResponse[request].computationTimeInMiliSec = durationMs;
+        encodedRequestToResponse[request].completed = true;
+        
         emit receivedResult(response);
+    }
+
+    function isCallRequired(bytes memory encodedRequest) internal {
+        if (recordRequest(keccak256(encodedRequest))) {
+            callCoprocessor(encodedRequest);
+        }
+        emit EncodedOperation(encodedRequest);
     }
 
 
     function add(uint256 a, uint256 b) external {
         Operation memory op = Operation(a, b, OperationType.Add);
         bytes memory encoded = abi.encode(op);
-        if (recordRequest(keccak256(encoded))) {
-            callCoprocessor(encoded);
-        }
-        emit EncodedOperation(encoded);
+        isCallRequired(encoded);
     }
 
     function subtract(uint256 a, uint256 b) external{
         Operation memory op = Operation(a, b, OperationType.Subtract);
         bytes memory encoded = abi.encode(op);
-        if (recordRequest(keccak256(encoded))) {
-            callCoprocessor(encoded);
-        }
-        emit EncodedOperation(encoded);
+        isCallRequired(encoded);
     }
 
     function divide(uint256 a, uint256 b) external {
         require(b != 0, "Division by zero");
         Operation memory op = Operation(a, b, OperationType.Divide);
         bytes memory encoded = abi.encode(op);
-        if (recordRequest(keccak256(encoded))) {
-            callCoprocessor(encoded);
-        }
-        emit EncodedOperation(encoded);
+        isCallRequired(encoded);
     }
 
     function multiply(uint256 a, uint256 b) external {
         Operation memory op = Operation(a, b, OperationType.Multiply);
         bytes memory encoded = abi.encode(op);
-        if (recordRequest(keccak256(encoded))) {
-            callCoprocessor(encoded);
-        }
-        emit EncodedOperation(encoded);
+        isCallRequired(encoded);
     }
 }
 

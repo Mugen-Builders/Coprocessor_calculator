@@ -1,9 +1,9 @@
-use json::{object, JsonValue};
-use std::env;
-use ethabi::{Token, decode, encode};
+use ethabi::{decode, encode, Token};
 use hex::decode as hex_decode;
 use hex::encode as hex_encode;
-
+use json::{object, JsonValue};
+use std::env;
+use std::time::Instant;
 
 #[derive(Debug)]
 enum OperationType {
@@ -38,7 +38,6 @@ pub async fn handle_advance(
     // remove_first_two_chars(&_payload);
     println!("payload without unnecesary content is: {}", modified_string);
 
-
     let bytes = hex_decode(modified_string).expect("Invalid hex");
 
     let tokens = decode(
@@ -48,21 +47,20 @@ pub async fn handle_advance(
             ethabi::ParamType::Uint(8),   // operation (as uint8)
         ],
         &bytes,
-    ).expect("Failed to decode ABI");
+    )
+    .expect("Failed to decode ABI");
 
     let first = tokens[0].clone().into_uint().unwrap();
     let second = tokens[1].clone().into_uint().unwrap();
     let op_raw = tokens[2].clone().into_uint().unwrap().as_u32() as u8;
 
     let op_type = parse_operation_type(op_raw).expect("Invalid operation type");
-    let result = perform_operation(first.as_u128(), second.as_u128(), op_type)
-        .expect("Operation failed");
+    let result = perform_operation(first.as_u128(), second.as_u128(), op_type);
 
-    let resultHex = encode_uint256_to_hex(result);
-
+    let result_hex = encode_tuple_to_hex(result);
 
     // Create a notice
-    let notice = object! { "payload" => resultHex };
+    let notice = object! { "payload" => result_hex };
     let notice_request = hyper::Request::builder()
         .method(hyper::Method::POST)
         .uri(format!("{}/notice", _server_addr))
@@ -112,17 +110,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+fn encode_tuple_to_hex(value: (Option<u128>, u128)) -> String {
+    let tokens = vec![
+        Token::Uint(value.0.expect("Error performing Calclation").into()),
+        Token::Uint(value.1.into()),
+    ];
+    let encoded = encode(&tokens);
 
-fn encode_uint256_to_hex(value: u128) -> String {
-    let token = Token::Uint(value.into());
-    let encoded = encode(&[token]); // ABI-encode as uint256
     format!("0x{}", hex_encode(encoded))
 }
 
-
-
-fn perform_operation(first: u128, second: u128, op_type: OperationType) -> Option<u128> {
-    match op_type {
+fn perform_operation(first: u128, second: u128, op_type: OperationType) -> (Option<u128>, u128) {
+    let start = Instant::now();
+    let result = match op_type {
         OperationType::Add => Some(first + second),
         OperationType::Subtract => Some(first - second),
         OperationType::Divide => {
@@ -132,7 +132,10 @@ fn perform_operation(first: u128, second: u128, op_type: OperationType) -> Optio
                 Some(first / second)
             }
         }
-        OperationType::Multiply => Some(first * second)
-    }
-}
+        OperationType::Multiply => Some(first * second),
+    };
 
+    let duration_ms = start.elapsed().as_millis() as u128;
+
+    return (result, duration_ms);
+}
